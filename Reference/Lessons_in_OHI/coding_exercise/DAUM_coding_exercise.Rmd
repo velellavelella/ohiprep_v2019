@@ -1,0 +1,331 @@
+---
+title: "Coding Exercise for NCEAS Data Science Job Application"
+output: html_document
+---
+
+## Instructions
+
+You will have 24 hours to complete this activity. You will work directly in this Rmarkdown document to:
+
+- write code to wrangle, analyze, and visualize the data  
+- answer questions and provide additional insights/thoughts
+- document workflow
+
+Note: If you are unfamiliar with Rmarkdown, that is no problem; just add your code to the gray code chunks and treat it like any .R file. Text can be added to the white parts of the document.
+
+Once you have finished, please add your last name to the file name (e.g., NAME_coding_exercise.Rmd) and send to: Ben Halpern and Melanie Frazier (halpern@nceas.ucsb.edu and frazier@nceas.ucsb.edu). 
+You can also provide a knitted html version of this file as well, but this is not necessary.
+
+You will be evaluated on: coding ability, documentation of code, and communication of results.     
+
+
+Please contact Melanie (frazier@nceas.ucsb.edu) if you have any questions about this exercise.
+
+
+## Packages
+
+Add packages you will use to the following code chunk.  We start by loading the `readr` package, which we will use to read in dataset.
+
+```{r setup}
+
+## loading packages
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+```
+
+
+
+## Data
+
+You will be working with a dataset describing global Ocean Health Index scores for:
+ 
+  - 10 goals and 1 "Index" score for each country.  Goals describe specific benefits we receive from the ocean (e.g., food provision and tourism and recreation) and the Index score is the overall score for the country calculated by averaging the 10 goal scores. 
+  - 220 countries/regions (we use these terms interchangably)
+  - 7 years
+  
+We will read in the data from GitHub.com, and do some preliminary exploration:
+
+```{r data}
+
+## read in OHI data:
+ohi_data <- read_csv("https://raw.githubusercontent.com/OHI-Science/ohiprep_v2019/gh-pages/Reference/Lessons_in_OHI/coding_exercise/scores.csv")
+
+
+## do an initial exploration of the data (i.e., what functions do you use to familiarize yourself with a dataset):
+# Q1: How many years are covered in the dataset?
+length(unique(ohi_data$year)) # A1: 7
+
+# Q2: What years does the dataset span?  
+c(min(ohi_data$year), max(ohi_data$year)) # A2: 2012 to 2018
+
+# Q3: Are any years missing?
+sum((diff(unique(ohi_data$year)) > 1) == T) # A3: No
+
+# Q4: Are there the same number of observations for each year?
+length(unique(data.frame(table(ohi_data$year))$Freq)) #A4: Yes.
+
+# Q5: Does each region per year include an instance of each goal id?
+sum(data.frame(ohi_data[order(ohi_data$goal),] %>%
+  group_by(year, region_id) %>%
+    summarize(all_goals = (sum(goal %in% (unique(ohi_data$goal)))) == length(unique(ohi_data$goal))))$all_goals == F) # A5: Yes
+
+# Q6: Does each region and goal pairing occur once per year?
+as.numeric(ohi_data %>%
+             count(goal, region_id) %>%
+             tally(n != 7)) # A6: Probably... (I'd like to do this better, for now we just see that each pair is repeated 7 times...)
+
+
+```
+
+What information did you learn about the data from your explorations? 
+
+This table includes Ocean Health Index data by country, year, and goal category. It includes seven consecutive years from 2012, and in each year, it includes every country and for every country each goal category and its OHI score.
+
+
+## Task 1
+
+Please help make these data more human readable by including the full goal name (vs. the 2 letter abbreviation) and the country name.  
+
+Here is a table that includes goal names: https://github.com/OHI-Science/ohi-global/blob/draft/global_supplement/tables/ten_goals.csv
+
+Here is a table with the region names: https://github.com/OHI-Science/ohi-global/blob/draft/eez/spatial/regions_list.csv
+(the rgn_id column in this file matches the region_id column in the ohi_data)
+
+```{r human readable}
+
+## Write code needed to update the ohi_data to include the full goal name and the country name.
+
+# Load regional abbreviations data
+reg_table <- data.frame(read.csv("https://raw.githubusercontent.com/OHI-Science/ohi-global/draft/eez/spatial/regions_list.csv"))
+
+# Match full region names to region IDs
+ohi_data$region_name <- as.character(reg_table$rgn_name[match(ohi_data$region_id, reg_table$rgn_id)])
+
+# Load goal abbreviations table
+goal_table <- data.frame(read.csv("https://raw.githubusercontent.com/OHI-Science/ohi-global/draft/global_supplement/tables/ten_goals.csv"))
+
+# Match full goal names to goal IDs
+ohi_data$goal_name <- as.character(goal_table$Goal[match(ohi_data$goal, goal_table$Abbreviation)])
+ohi_data$goal_name[which(ohi_data$goal == "Index")] <- "Index Score"
+
+# Reorganize columns more logically
+ohi_data <- ohi_data[,c("year", names(ohi_data)[c(grep("goal", names(ohi_data)), grep("region", names(ohi_data)))], "score")]
+
+
+## Write code to save the new version of the data frame.
+write.csv(ohi_data, paste0(getwd(), "/ohi_data_DAUM_EDITED_", format(Sys.time(), format = "%Y%m%d%H%M"), ".csv"))
+
+```
+
+
+## Task 2
+
+The above description of the data claims there are 220 countries with Ocean Health Index scores; however, a quick examination of these data reveals there are 221 countries in the data:
+
+```{r countrycount}
+
+length(unique(ohi_data$region_id))
+
+```
+
+
+One of the countries has no data.  Figure out which one.
+
+```{r regions}
+
+## Write code to identify the country with no data.
+
+# Strategy: filter data by count of NAs, compare with count of observations by region
+
+ohi_data$score_na <- is.na(ohi_data$score) # Create column counting NA instances in "score"
+reg_na <- data.frame(ohi_data %>%
+  count(region_name, score_na) %>%
+  filter(score_na == T)) # Get NA tally by region
+
+ohi_data <- ohi_data[,c(1:(ncol(ohi_data)-1))] # Remove NA column (I'm sure there is a beter way to do this...)
+  
+reg_na <- merge(reg_na, data.frame(table(ohi_data$region_name)), by.x = "region_name", by.y = "Var1") # Count observations in data of each region (to be safe)
+
+reg_na[which(reg_na$n == reg_na$Freq),"region_name"] # Find instance in which NA count is equal to observation count
+
+# Results: Antarctica contains no "score" data in any of its observations
+
+```
+
+
+## Task 3
+
+Create a plot showing all 10 goal scores and the "Index" score for the United States of America from 2012 to 2017. 
+
+```{r US}
+
+## Code to create plot of USA of 10 goal and Index scores across years
+
+# Strategy: Sort data, create bar plot
+ohi_USA <- ohi_data %>%
+  filter(region_name == "United States") %>%
+  filter((year >= 2012) & (year <= 2017))
+
+ohi_USA <- ohi_USA[order(ohi_USA$year, ohi_USA$score),] # Order by score per year
+
+group_colors <- c("steelblue", "deepskyblue3", "seagreen3", "cyan", "cyan3", "seagreen1", "blue", "darkgreen", "slategray4", "olivedrab4", "springgreen3")
+
+ggplot(ohi_USA, aes(x=year, y=score)) +
+  geom_col(aes(fill=factor(goal_name, ordered = T)), width = .75, position = position_dodge()) +
+  scale_fill_manual(values = group_colors, name = "Goal Index Category")+
+  scale_x_discrete(limits = unique(ohi_USA$year)) +
+  scale_y_discrete(limits = seq(from = 0, to = 100, by = 10)) +
+  xlab("Year") + 
+  ylab(paste0("Ocean Health Index Score")) + 
+  ggtitle("Ocean Health Scores by Year") +
+  theme(text = element_text(size=22, face = "bold", margin = margin(t = 0, r = 0, b = 12, l = 0)),
+        panel.background = element_rect(fill = "grey28"),
+        panel.border = element_rect(color = "cyan", fill = NA),
+        axis.ticks = element_line(size = .5, color = "darkgrey"),
+        panel.grid.major = element_line(colour = "grey", size = .3),
+        panel.grid.minor = element_line(colour = "grey", size = .3)
+  ) + 
+  labs(caption = "Shaded area represents generic fetch at WD˚ \nPoints represent unique observations",
+       subtitle = "Data from the United States between 2012 and 2017")+
+  theme(plot.subtitle=element_text(hjust = 0),
+        plot.caption=element_text(hjust = 0))
+
+  # Results: I am not exactly happy with this plot, but here it is.
+
+```
+
+
+## Task 4
+
+For each country and goal (i.e., the 10 goal + 1 Index scores), calculate the average score across all years (note: each country should have N=11 scores when finished).
+
+```{r across year avg}
+
+## Code to summarize data
+
+# Strategy: Use dplyr to summarize data by mean score for all years represented
+ohi_means <- data.frame(ohi_data %>%
+                          group_by(region_name, goal_name) %>%
+                          summarize(mean(score)))
+                          
+names(ohi_means) <- c("Region", "Goal", "Mean Score") # Rename columns
+
+
+```
+
+
+Create a plot that shows the distribution (e.g., histogram or barplot or ??) of *Index* scores of all countries.
+
+```{r across year plot}
+
+## Code to create a plot showing distribution of country Index scores
+ohi_index <- data.frame(ohi_means %>%
+  filter(ohi_means$Goal == "Index Score"))[,c(1, 3)] # Subset for index values only
+
+ohi_index <- ohi_index[order(ohi_index$Mean_Score),] # Sort for viewing by order
+
+ohi_index$Region <- factor(ohi_index$Region, levels = ohi_index$Region[order(ohi_index$Mean_Score)]) # Change Region class to factor
+
+ohi_index <- ohi_index[which(is.na(ohi_index$Mean_Score) == F),] # Remove NA values (Antarctica)
+
+ohi_index$Region_id <- ohi_data$region_id[match(ohi_index$Region, reg_table$rgn_name)] # Get region ID
+
+ohi_index$Region_id <- factor(ohi_index$Region_id, levels = ohi_index$Region_id[order(ohi_index$Mean_Score)]) # Change Region ID class to factor
+
+
+# Function to situate a number on 360˚ scale (taken from Daum_FXNLIBSAMPLE.R)
+bearing360 <- function(bearings){
+  bearings_out <- list()
+  for (bearing in bearings){
+    if (bearing > 360){
+      bearing <- bearing-360
+    } else {
+      if (bearing < 0){
+        bearing <- bearing+(360*ceiling(abs(bearing/360)))
+      }
+    }
+    bearings_out <- append(bearings_out, bearing)
+  }
+  return(unlist(bearings_out))
+}
+
+# This label strategy modified from: https://www.r-graph-gallery.com/296-add-labels-to-circular-barplot.html
+label_data <- ohi_index
+
+# Calculate the angle of the labels
+number_of_bar <- nrow(label_data)
+angle <- cumsum(rep((360/220), 220)) # Count up ascending angles for text rotation
+label_data$angle <- bearing360(angle[c(length(angle):1)]+90)
+
+# Calculate the alignment of labels: right or left
+label_data$hjust<-ifelse( angle < -90, 1, 0)
+
+
+OHI_by_Country <- ggplot(ohi_index[order(ohi_index$Mean_Score),])+
+  geom_col(aes(x=factor(Region, ordered = T), y=Mean_Score, fill = Mean_Score), color = "white") +
+  scale_fill_gradient(low = "cyan", high = "blue")+
+  scale_color_gradient(low = "cyan", high = "blue")+
+  theme(axis.text.x=element_blank(),
+        legend.position = "none")+
+  coord_polar()+
+  geom_text(data=label_data, aes(x=Region, 
+                                 y=Mean_Score+10, 
+                                 label=Region, 
+                                 hjust=hjust,
+                                 color = Mean_Score), 
+            #color="black", 
+            fontface="bold",
+            alpha=0.6, 
+            size=1, 
+            angle= label_data$angle, 
+            inherit.aes = FALSE )+
+  xlab("Country") + 
+  ylab(paste0("Score")) + 
+  ggtitle("Ocean Health Index Score by Country") +
+  theme(text = element_text(size=15,
+                            face = "bold",
+                            color = "steelblue4",
+                            margin = margin(t = 0, r = 0, b = 12, l = 0)),
+        axis.text.y = element_text(color = "steelblue3", size = 8),
+        panel.background = element_rect(fill = "white"),
+        panel.border = element_rect(color = "white", fill = NA),
+        axis.ticks = element_line(size = .5, color = "white"),
+        panel.grid.major = element_line(colour = "white", size = .3),
+        panel.grid.minor = element_line(colour = "white", size = .3),
+        plot.margin = margin(1,1,1,1, "cm")
+  )
+  
+# Results: A polar plot that I have not properly sized yet...
+
+
+```
+
+
+
+## Task 5
+Figure out which goals have the most NA values for scores in 2018.  Which ones have the least?  
+
+```{r missing data}
+
+## Explore missing data
+# Strategy: use strategy implemented in task 2
+ohi_data$score_na <- is.na(ohi_data$score) # Create column counting NA observations
+goal_na <- data.frame(ohi_data %>%
+                       count(goal, score_na) %>%
+                       filter(score_na == T)) # Get NA tally per region
+
+ohi_data <- ohi_data[,c(1:(ncol(ohi_data)-1))] # Remove NA column (I'm sure there is a beter way to do this...)
+
+goal_na <- goal_na[order(goal_na$n, decreasing = T),] # Sort by most NA scores
+
+goal_na$Goal_name <- goal_table$Goal[match(goal_na$goal, goal_table$Abbreviation)] # Get full goal names
+
+# Results: highest occurrences of NA values is in goal "Natural Products"; lowest are in "Artisanal Fishing Opportunity", "Biodiversity", "Clean Waters", and "Sense of Place"
+
+
+
+```
+
+
